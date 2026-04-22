@@ -1,8 +1,9 @@
-deepface==0.0.99
 opencv-python==4.13.0.92
 numpy==2.4.4
 mediapipe==0.10.14
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.12
+deepface==0.0.99
 tensorflow==2.21.0
 tf-keras==2.21.0
 retina-face==0.0.17
+python-dotenv==1.2.2
