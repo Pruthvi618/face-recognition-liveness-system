@@ -32,7 +32,7 @@ def get_embedding(image_input: Any, enforce_detection: bool = True) -> list[floa
             detector_backend=settings.model_detector_backend,
             enforce_detection=enforce_detection,
             align=True,
-        )
+        ) 
         return embedding[0]["embedding"]
     except Exception:
         LOGGER.exception("Failed to extract embedding")

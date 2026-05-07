@@ -19,14 +19,18 @@ from app.logger import configure_logging
 def main() -> None:
     """Parse CLI args and run registration."""
     parser = argparse.ArgumentParser(description="Register a user embedding from an image.")
-    parser.add_argument("--name", required=True, help="Person name to register")
-    parser.add_argument("--image", required=True, help="Path to input image")
+    parser.add_argument("--name", help="Person name to register")
+    parser.add_argument("--image", help="Path to input image")
     args = parser.parse_args()
+
+    name = args.name or input("Enter user name: ").strip()
+    image = args.image or input("Enter image path: ").strip()
 
     configure_logging()
     from app.service import register_user
 
-    print(register_user(args.name, args.image))
+    print(register_user(name, image))
+    
 
 
 if __name__ == "__main__":

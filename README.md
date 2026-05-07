@@ -1,16 +1,17 @@
 # FaceRecognition Project
 
-Production-oriented face recognition service with registration, verification, and realtime liveness checks.
+Production-oriented FastAPI face recognition service with registration, verification, and realtime liveness checks.
 
 ## Features
 - DeepFace ArcFace embeddings for identity matching
 - PostgreSQL-backed enrollment store with pooled DB connections
 - Realtime liveness: blink + head movement + anti-spoof screen artifact checks
+- FastAPI endpoints for enrollment, still-image verification, and realtime webcam verification
 - Environment-driven configuration (no hardcoded secrets required)
 - CLI entrypoints for register, verify, liveness-test, and realtime verification
 
 ## Project Structure
-- `app/`: core modules (`model`, `service`, `database`, `liveness`, `utils`, `logger`)
+- `app/`: API and core modules (`main`, `model`, `service`, `database`, `liveness`, `utils`, `logger`)
 - `scripts/`: runnable CLI scripts
 - `images/`: sample images for local testing
 - `config.py`: validated environment-based settings
@@ -34,7 +35,74 @@ Production-oriented face recognition service with registration, verification, an
 4. Update `.env` with your PostgreSQL credentials.
 5. Ensure PostgreSQL is running. Tables are auto-created on first app use.
 
+## FastAPI Usage
+
+Start the API server:
+```bash
+uvicorn app.main:api --reload
+```
+
+Or run directly with Python:
+```bash
+python app/main.py --reload --port 8000
+```
+
+Open the interactive API form:
+```text
+http://127.0.0.1:8000/docs
+```
+
+If `8000` is already used, choose another port:
+```bash
+python app/main.py --reload --port 8011
+```
+
+Register user:
+```bash
+curl -X POST "http://127.0.0.1:8000/register" ^
+  -F "name=Pruthvi" ^
+  -F "image=@images/test2.jpg"
+```
+
+Verify from image:
+```bash
+curl -X POST "http://127.0.0.1:8000/verify" ^
+  -F "image=@images/test.jpg"
+```
+
+Verify from image with passive liveness:
+```bash
+curl -X POST "http://127.0.0.1:8000/verify" ^
+  -F "require_liveness=true" ^
+  -F "image=@images/test.jpg"
+```
+
+Realtime verify using the API server machine camera:
+```bash
+curl -X POST "http://127.0.0.1:8000/verify/realtime" ^
+  -F "camera_index=0"
+```
+
+Example verification response:
+```json
+{
+  "success": true,
+  "status": "matched",
+  "message": "Matched: Pruthvi (score=0.78)",
+  "matched": true,
+  "name": "Pruthvi",
+  "score": 0.7812,
+  "threshold": 0.65,
+  "margin": 0.12
+}
+```
+
 ## CLI Usage
+
+Register user interactively:
+```bash
+python scripts/register_user.py
+```
 
 Register user:
 ```bash
@@ -66,6 +134,6 @@ Configured via `.env` or system environment:
 
 ## Production Notes
 - Use strong database passwords and secret management (vault/KMS) in production.
-- Run behind a service layer/API with authentication and rate limiting.
+- Add authentication and rate limiting before exposing the API outside a trusted network.
 - Add monitoring around liveness failures, spoof detections, and match confidence.
 - For high-security environments, pair heuristic anti-spoofing with a dedicated anti-spoof model.

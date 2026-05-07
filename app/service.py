@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import cv2
 import time
+from typing import Any
 
 from app.model import get_embedding
 from app.database import ensure_schema, insert_user, get_all_users
@@ -56,6 +57,27 @@ def register_user(name: str, image_path: str) -> str:
     return "User registered successfully"
 
 
+def register_user_from_frame(name: str, frame: Any) -> dict[str, Any]:
+    """Register one user from an already-decoded image frame."""
+    _ensure_schema_ready()
+    embedding = get_embedding(frame)
+    if embedding is None:
+        return {
+            "success": False,
+            "status": "no_face_detected",
+            "message": "No face detected",
+            "name": name,
+        }
+
+    insert_user(name, embedding)
+    return {
+        "success": True,
+        "status": "registered",
+        "message": "User registered successfully",
+        "name": name,
+    }
+
+
 def _adaptive_threshold(scores: list[float]) -> float:
     """Compute a bounded threshold from the current similarity distribution."""
     if not scores:
@@ -68,7 +90,7 @@ def _adaptive_threshold(scores: list[float]) -> float:
     return max(MIN_THRESHOLD, min(threshold, MAX_THRESHOLD))
 
 
-def _match_embedding(embedding: list[float]) -> str:
+def _match_embedding_result(embedding: list[float]) -> dict[str, Any]:
     """Match a probe embedding against enrolled users.
 
     Why we need this:
@@ -77,7 +99,16 @@ def _match_embedding(embedding: list[float]) -> str:
     _ensure_schema_ready()
     users = get_all_users()
     if not users:
-        return "No registered users found"
+        return {
+            "success": False,
+            "status": "no_registered_users",
+            "message": "No registered users found",
+            "matched": False,
+            "name": None,
+            "score": None,
+            "threshold": None,
+            "margin": None,
+        }
 
     scored_by_name = {}
     for name, db_embedding in users:
@@ -95,8 +126,32 @@ def _match_embedding(embedding: list[float]) -> str:
     margin = best_score - second_best_score if second_best_score >= 0 else best_score
 
     if best_score >= threshold and margin >= MIN_MARGIN:
-        return f"Matched: {best_match} (score={best_score:.2f})"
-    return "Unknown person"
+        return {
+            "success": True,
+            "status": "matched",
+            "message": f"Matched: {best_match} (score={best_score:.2f})",
+            "matched": True,
+            "name": best_match,
+            "score": round(best_score, 4),
+            "threshold": round(threshold, 4),
+            "margin": round(margin, 4),
+        }
+
+    return {
+        "success": True,
+        "status": "unknown",
+        "message": "Unknown person",
+        "matched": False,
+        "name": None,
+        "score": round(best_score, 4),
+        "threshold": round(threshold, 4),
+        "margin": round(margin, 4),
+    }
+
+
+def _match_embedding(embedding: list[float]) -> str:
+    """Return the legacy CLI message for an embedding match."""
+    return _match_embedding_result(embedding)["message"]
 
 
 def verify_user(image_path: str) -> str:
@@ -110,6 +165,56 @@ def verify_user(image_path: str) -> str:
         return "No face detected"
 
     return _match_embedding(embedding)
+
+
+def verify_user_from_frame(frame: Any) -> dict[str, Any]:
+    """Verify identity from an already-decoded image frame."""
+    embedding = get_embedding(frame)
+    if embedding is None:
+        return {
+            "success": False,
+            "status": "no_face_detected",
+            "message": "No face detected",
+            "matched": False,
+            "name": None,
+            "score": None,
+            "threshold": None,
+            "margin": None,
+        }
+
+    return _match_embedding_result(embedding)
+
+
+def verify_frame_with_liveness(frame: Any) -> dict[str, Any]:
+    """Verify identity from a decoded frame only if image liveness passes."""
+    anti_spoof_ok, anti_spoof_msg = anti_spoof_check(frame)
+    passive_score = passive_liveness_score(frame)
+    if (not anti_spoof_ok) or passive_score < MIN_PASSIVE_FOR_MATCH:
+        return {
+            "success": False,
+            "status": "liveness_failed",
+            "message": "Liveness failed (use realtime blink + head movement for strong check)",
+            "liveness": {
+                "passed": False,
+                "anti_spoof_message": anti_spoof_msg,
+                "passive_score": round(passive_score, 4),
+                "minimum_passive_score": MIN_PASSIVE_FOR_MATCH,
+            },
+            "matched": False,
+            "name": None,
+            "score": None,
+            "threshold": None,
+            "margin": None,
+        }
+
+    result = verify_user_from_frame(frame)
+    result["liveness"] = {
+        "passed": True,
+        "anti_spoof_message": anti_spoof_msg,
+        "passive_score": round(passive_score, 4),
+        "minimum_passive_score": MIN_PASSIVE_FOR_MATCH,
+    }
+    return result
 
 
 def verify_with_liveness(image_path: str) -> str:
@@ -129,7 +234,7 @@ def verify_with_liveness(image_path: str) -> str:
     return verify_user(image_path)
 
 
-def verify_realtime(camera_index: int = 0) -> str:
+def verify_realtime_result(camera_index: int = 0, show_window: bool = False) -> dict[str, Any]:
     """Run webcam liveness and then perform real-time identity matching.
 
     Why we need this:
@@ -137,25 +242,38 @@ def verify_realtime(camera_index: int = 0) -> str:
     """
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        return "Camera unavailable"
+        return {
+            "success": False,
+            "status": "camera_unavailable",
+            "message": "Camera unavailable",
+            "matched": False,
+            "name": None,
+        }
 
     reset_liveness_state()
-    print("Checking liveness... Do blink and slight head movement")
     last_msg = None
     start_time = time.time()
+    liveness_message = "Do blink and slight head movement"
 
     while True:
         ret, frame = cap.read()
         if not ret:
             cap.release()
-            cv2.destroyAllWindows()
-            return "Camera read failed"
+            if show_window:
+                cv2.destroyAllWindows()
+            return {
+                "success": False,
+                "status": "camera_read_failed",
+                "message": "Camera read failed",
+                "matched": False,
+                "name": None,
+            }
 
         is_live, msg = check_liveness(frame)
         LOGGER.debug("Liveness status: %s", msg)
+        liveness_message = msg
 
         if msg != last_msg:
-            print(msg)
             last_msg = msg
 
         if is_live:
@@ -163,20 +281,35 @@ def verify_realtime(camera_index: int = 0) -> str:
 
         if time.time() - start_time > LIVENESS_TIMEOUT_SECONDS:
             cap.release()
-            cv2.destroyAllWindows()
-            return "Liveness timeout, please try again"
+            if show_window:
+                cv2.destroyAllWindows()
+            return {
+                "success": False,
+                "status": "liveness_timeout",
+                "message": "Liveness timeout, please try again",
+                "liveness": {"passed": False, "message": liveness_message},
+                "matched": False,
+                "name": None,
+            }
 
-        cv2.imshow("Liveness Check", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            cap.release()
-            cv2.destroyAllWindows()
-            return "Cancelled"
+        if show_window:
+            cv2.imshow("Liveness Check", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                cap.release()
+                cv2.destroyAllWindows()
+                return {
+                    "success": False,
+                    "status": "cancelled",
+                    "message": "Cancelled",
+                    "matched": False,
+                    "name": None,
+                }
 
-    print("Liveness passed. Hold still and face the camera...")
+    LOGGER.info("Liveness passed. Matching identity from live frames.")
 
     # After challenge steps (blink/turn), collect a short burst of frames and
     # try matching each one. This avoids matching on a side-pose frame.
-    matched_result = None
+    matched_result: dict[str, Any] | None = None
     sampled = 0
     max_samples = 24
 
@@ -193,17 +326,33 @@ def verify_realtime(camera_index: int = 0) -> str:
         if embedding is None:
             continue
 
-        result = _match_embedding(embedding)
-        if result.startswith("Matched:"):
+        result = _match_embedding_result(embedding)
+        if result["status"] == "matched":
             matched_result = result
             break
 
     cap.release()
-    cv2.destroyAllWindows()
+    if show_window:
+        cv2.destroyAllWindows()
 
     if matched_result is not None:
         LOGGER.info("Realtime verification success: %s", matched_result)
+        matched_result["liveness"] = {"passed": True, "message": liveness_message}
         return matched_result
 
     LOGGER.info("Realtime verification result: Unknown person")
-    return "Unknown person"
+    return {
+        "success": True,
+        "status": "unknown",
+        "message": "Unknown person",
+        "liveness": {"passed": True, "message": liveness_message},
+        "matched": False,
+        "name": None,
+    }
+
+
+def verify_realtime(camera_index: int = 0) -> str:
+    """Return the legacy CLI message for realtime verification."""
+    print("Checking liveness... Do blink and slight head movement")
+    result = verify_realtime_result(camera_index=camera_index, show_window=True)
+    return result["message"]
